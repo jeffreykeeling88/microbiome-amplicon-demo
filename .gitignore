@@ -1,5 +1,6 @@
 data/
 ref/
 results/filtered/
+results/summary.rds
 *.Rhistory
 .RData

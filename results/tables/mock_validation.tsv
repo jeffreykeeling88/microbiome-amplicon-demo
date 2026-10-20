@@ -1,0 +1,2 @@
+sample	asvs_detected	asvs_exact_match	asvs_unexpected	reference_sequences	pct_reads_exact
+Mock	20	20	0	32	100

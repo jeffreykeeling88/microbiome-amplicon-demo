@@ -22,7 +22,7 @@ res <- lapply(mocks, function(m) {
     asvs_detected       = length(present),
     asvs_exact_match    = sum(hit),
     asvs_unexpected     = sum(!hit),
-    strains_in_mock     = length(ref),
+    reference_sequences = length(ref),
     pct_reads_exact     = round(100 * sum(present[hit]) / sum(present), 2)
   )
 })

@@ -8,7 +8,7 @@ source("config.R")
 pal_cat <- c("#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#6250d6", "#e34948")
 col_other <- "#b9b8b2"
 theme_set(theme_minimal(base_size = 11) +
-  theme(panel.grid.minor = element_blank(),
+  theme(panel.grid.minor = element_blank(), plot.title.position = "plot",
         panel.grid.major = element_line(colour = "#ecebe7", linewidth = 0.4),
         axis.text  = element_text(colour = "#52514e"),
         axis.title = element_text(colour = "#0b0b0b"),
@@ -25,6 +25,16 @@ fmt_p <- function(p) ifelse(p < 0.001, "p < 0.001", sprintf("p = %.3f", p))
 ps_all <- readRDS(file.path(cfg$out_dir, "phyloseq.rds"))
 ps <- prune_samples(!sample_names(ps_all) %in% cfg$mock_samples, ps_all)
 ps <- prune_taxa(taxa_sums(ps) > 0, ps)
+# Remove non-bacterial host signal: chloroplast and mitochondrial 16S, unassigned kingdom
+tt <- as.data.frame(tax_table(ps), stringsAsFactors = FALSE)
+offtarget <- is.na(tt$Kingdom) | tt$Kingdom == "Eukaryota" |
+  (!is.na(tt$Order) & tt$Order == "Chloroplast") | (!is.na(tt$Family) & tt$Family == "Mitochondria")
+n_off_reads <- sum(taxa_sums(ps)[offtarget])
+ps <- prune_taxa(!offtarget, ps)
+message(sprintf("Removed %d off-target ASVs (chloroplast, mitochondria, unassigned): %.2f%% of reads",
+                sum(offtarget), 100 * n_off_reads / (n_off_reads + sum(taxa_sums(ps)))))
+offtarget_summary <- data.frame(asvs_removed = sum(offtarget),
+                                pct_reads_removed = round(100 * n_off_reads / (n_off_reads + sum(taxa_sums(ps))), 2))
 grp <- cfg$group_col
 groups <- sort(unique(as.character(sample_data(ps)[[grp]])))
 sample_data(ps)[[grp]] <- factor(sample_data(ps)[[grp]], levels = groups)
@@ -86,7 +96,7 @@ p_beta <- ggplot(pcoa, aes(Axis.1, Axis.2)) +
   scale_colour_manual(values = group_cols, name = NULL) +
   scale_fill_manual(values = group_cols, name = NULL) +
   labs(title = "Community composition (Bray-Curtis PCoA)",
-       subtitle = sprintf("PERMANOVA R² = %.2f, %s  ·  dispersion %s",
+       subtitle = sprintf("PERMANOVA R2 = %.2f, %s; dispersion test %s",
                           perm$R2[1], fmt_p(perm$`Pr(>F)`[1]), fmt_p(disp$tab$`Pr(>F)`[1])),
        x = sprintf("PCoA 1 (%.1f%%)", ev[1]), y = sprintf("PCoA 2 (%.1f%%)", ev[2])) +
   coord_equal()
@@ -158,8 +168,8 @@ if (two_groups) {
       geom_point(aes(fill = direction), shape = 21, size = 3.2, colour = "white", stroke = 0.7) +
       scale_fill_manual(values = dir_cols, name = NULL) +
       labs(title = "Differentially abundant genera",
-           subtitle = sprintf("CLR-transformed counts, Wilcoxon test, BH-adjusted q < 0.05 (%d of %d genera tested)",
-                              sum(da$q < 0.05), nrow(da)),
+           subtitle = sprintf("%d of %d genera significant (Wilcoxon on CLR counts, BH q < 0.05)%s",
+                              sum(da$q < 0.05), nrow(da), if (sum(da$q < 0.05) > 15) "; top 15 shown" else ""),
            x = sprintf("Median CLR difference (%s minus %s)", groups[2], groups[1]), y = NULL)
     save_fig(p_da, "differential_abundance.png", w = 7.5, h = 0.6 + 0.32 * nrow(sig) + 1.4)
   }
@@ -178,6 +188,6 @@ p_track <- ggplot(tl, aes(step, reads, group = sample)) +
        median(track$pct_retained, na.rm = TRUE)), x = NULL, y = "Reads per sample")
 save_fig(p_track, "read_tracking.png", w = 6.5, h = 4)
 
-saveRDS(list(alpha_tests = alpha_tests, beta_tests = beta_tests, da = da, depth = depth,
+saveRDS(list(offtarget = offtarget_summary, alpha_tests = alpha_tests, beta_tests = beta_tests, da = da, depth = depth,
              groups = groups, top = top), file.path(cfg$out_dir, "summary.rds"))
 message("Diversity analysis complete.")

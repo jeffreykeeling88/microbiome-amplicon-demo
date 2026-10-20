@@ -1,0 +1,3 @@
+test	R2	F	p
+PERMANOVA (adonis2)	0.43	12.81	2e-04
+Dispersion (betadisper)	NA	9.76	0.005
