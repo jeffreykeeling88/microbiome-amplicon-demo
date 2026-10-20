@@ -1,0 +1,5 @@
+data/
+ref/
+results/filtered/
+*.Rhistory
+.RData

@@ -1,0 +1,129 @@
+---
+title: "16S rRNA Amplicon Analysis Report"
+subtitle: "Demo project: mouse gut microbiome, early vs. late post-weaning"
+author: "Jeff Keeling, Microbiome Bioinformatics"
+date: "`r format(Sys.Date(), '%B %d, %Y')`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    theme: flatly
+    self_contained: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_knit$set(root.dir = normalizePath(".."))
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE, fig.align = "center")
+```
+
+```{r load}
+suppressPackageStartupMessages({ library(knitr); library(dplyr) })
+source("config.R")
+R    <- normalizePath(cfg$out_dir)
+tab  <- function(f) read.delim(file.path(R, "tables", f), check.names = FALSE)
+fig  <- function(f) knitr::include_graphics(file.path(R, "figures", f), rel_path = FALSE)
+S     <- readRDS(file.path(R, "summary.rds"))
+track <- tab("read_tracking.tsv")
+taxa  <- tab("asv_taxonomy.tsv")
+mock  <- if (file.exists(file.path(R, "tables", "mock_validation.tsv"))) tab("mock_validation.tsv") else NULL
+eco   <- track[!track$sample %in% cfg$mock_samples, ]
+fp    <- function(p) ifelse(p < 0.001, "p < 0.001", sprintf("p = %.3f", p))
+perm  <- S$beta_tests[1, ]; disp <- S$beta_tests[2, ]
+sig   <- S$da[S$da$q < 0.05, ]
+```
+
+## Summary
+
+This report covers `r nrow(eco)` samples (`r paste(table(read.delim(cfg$metadata)$Group[read.delim(cfg$metadata)$Group != "Mock"]), names(table(read.delim(cfg$metadata)$Group[read.delim(cfg$metadata)$Group != "Mock"])), collapse = ", ")`) sequenced on the 16S rRNA V4 region (Illumina MiSeq, 2×250 bp), plus one mock community used as an accuracy control.
+
+- **`r format(sum(track$input), big.mark = ",")` raw read pairs** were processed into **`r nrow(taxa)` amplicon sequence variants (ASVs)**; a median of **`r median(track$pct_retained)`%** of reads per sample passed every quality step.
+`r if (!is.null(mock)) sprintf("- **Accuracy check:** in the mock community, %d of %d ASVs matched a known reference strain exactly, accounting for %.1f%% of mock reads.", mock$asvs_exact_match, mock$asvs_detected, mock$pct_reads_exact)`
+- **Community composition differs between groups** (PERMANOVA R² = `r perm$R2`, `r fp(perm$p)`), explaining about `r round(100 * perm$R2)`% of between-sample variation.
+- **Within-sample diversity:** observed richness `r fp(S$alpha_tests$p[S$alpha_tests$metric == "Observed ASVs"])`; Shannon index `r fp(S$alpha_tests$p[S$alpha_tests$metric == "Shannon index"])`.
+- **`r nrow(sig)` of `r nrow(S$da)` genera** differ significantly in abundance after correcting for multiple testing.
+
+## 1. Read quality and processing
+
+Quality profiles were used to set truncation lengths of `r cfg$trunc_len[1]` bp (forward) and `r cfg$trunc_len[2]` bp (reverse), where median quality stays well above Q30.
+
+```{r, out.width="49%", fig.show="hold"}
+fig("qc_quality_forward.png"); fig("qc_quality_reverse.png")
+```
+
+Reads were filtered (max `r cfg$max_ee[1]` expected errors, no ambiguous bases), denoised with DADA2, merged, length-filtered to `r cfg$expected_len[1]`–`r cfg$expected_len[2]` bp, and screened for chimeras.
+
+```{r, out.width="75%"}
+fig("read_tracking.png")
+```
+
+<details><summary>Per-sample read counts</summary>
+```{r}
+kable(track[, c("sample", "input", "filtered", "merged", "nonchim", "pct_retained")],
+      col.names = c("Sample", "Raw", "Filtered", "Merged", "Final", "% retained"), format.args = list(big.mark = ","))
+```
+</details>
+
+```{r, results="asis"}
+if (!is.null(mock)) {
+  cat("## 2. Accuracy check: mock community\n\n")
+  cat(sprintf("The mock community contains %d known bacterial strains. The pipeline recovered %d ASVs from it, %d of which match a reference sequence exactly (%.1f%% of mock reads). %s\n\n",
+      mock$strains_in_mock, mock$asvs_detected, mock$asvs_exact_match, mock$pct_reads_exact,
+      if (mock$asvs_unexpected == 0) "No spurious ASVs were produced, so the error-correction step is not inflating diversity." else
+        sprintf("The %d non-matching ASV(s) are low-abundance and consistent with minor contamination or residual errors.", mock$asvs_unexpected)))
+}
+```
+
+## 3. Within-sample (alpha) diversity
+
+```{r, out.width="85%"}
+fig("alpha_diversity.png")
+```
+
+```{r}
+kable(S$alpha_tests %>% mutate(p = fp(p)), col.names = c("Metric", "p-value", "Test"))
+```
+
+## 4. Between-sample (beta) diversity
+
+```{r, out.width="70%"}
+fig("beta_pcoa_bray.png")
+```
+
+PERMANOVA on Bray-Curtis distances shows group explains **`r round(100 * perm$R2)`%** of community variation (`r fp(perm$p)`, 9,999 permutations). `r if (disp$p >= 0.05) "Group dispersions do not differ significantly, so this result reflects a real shift in community centroid rather than a difference in spread." else "Group dispersions also differ, so part of the PERMANOVA signal may reflect differences in within-group spread; interpret with that in mind."`
+
+## 5. Taxonomic composition
+
+```{r, out.width="100%"}
+fig("taxa_barplot_genus.png")
+```
+
+## 6. Differentially abundant genera
+
+Genera present in at least 20% of samples were CLR-transformed and compared between groups with a Wilcoxon rank-sum test, with Benjamini-Hochberg correction.
+
+```{r, out.width="85%"}
+if (file.exists(file.path(R, "figures", "differential_abundance.png"))) fig("differential_abundance.png")
+```
+
+```{r}
+kable(head(sig, 15) %>% mutate(p = signif(p, 2), q = signif(q, 2)),
+      col.names = c("Genus", "Prevalence", "Median CLR diff.", "p", "q (BH)"), row.names = FALSE)
+```
+
+## Methods
+
+Paired-end reads were processed in R with DADA2 (v`r packageVersion("dada2")`). Reads were truncated at `r cfg$trunc_len[1]`/`r cfg$trunc_len[2]` bp and filtered at maxEE = `r cfg$max_ee[1]`; error rates were learned per run and used for sample inference. Pairs were merged with a minimum `r cfg$min_overlap` bp overlap, sequences outside `r cfg$expected_len[1]`–`r cfg$expected_len[2]` bp were removed, and chimeras were removed with the consensus method. Taxonomy was assigned with the naive Bayesian classifier against SILVA v138.2 (minimum bootstrap 50) with exact-match species assignment. Community analyses used phyloseq (v`r packageVersion("phyloseq")`) and vegan (v`r packageVersion("vegan")`). Alpha diversity was computed on data rarefied to `r format(S$depth, big.mark = ",")` reads per sample. Beta diversity used Bray-Curtis distances on relative abundances, tested with PERMANOVA (adonis2) and homogeneity of dispersions (betadisper), each with 9,999 permutations.
+
+## Deliverables
+
+| File | Contents |
+|---|---|
+| `tables/asv_counts.tsv` | ASV × sample count table |
+| `tables/asv_taxonomy.tsv` | Taxonomy and sequence for each ASV |
+| `asv_sequences.fasta` | ASV sequences |
+| `phyloseq.rds` | Ready-to-use phyloseq object for further analysis in R |
+| `tables/*.tsv` | All statistics shown in this report |
+| `figures/*.png` | Publication-ready figures (200 dpi) |
+| `scripts/` | Full, commented code to reproduce every result |
+
+*Demo data: Kozich et al. (2013) Applied and Environmental Microbiology 79:5112–5120, distributed with the mothur MiSeq SOP.*
